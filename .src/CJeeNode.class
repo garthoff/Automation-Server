@@ -1,0 +1,396 @@
+' Gambas class file
+
+' Description:
+' CJeeNode.class
+' Connect to JeeNode interface via tcp socket.
+
+' Development Status:
+' Under Development
+
+' DomotiGa - an open source home automation program.
+' Copyright(C) 2008-2012 Ron Klinkien
+
+' Read file called COPYING for license details.
+
+Property TCPHost As String
+Property TCPPort As Integer
+Property JeeNodeDebug As Boolean
+
+Private sTCPHost As String
+Private iTCPPort As Integer
+Private bJeeNodeDebug As Boolean
+
+Public hJeeNode As New Socket
+Public tJeeNodeConnect As Timer
+Private iConnectRetry As Integer = 0 ' retries
+Private iConnectDelay As Integer = 60000 ' 1 minute
+
+PRIVATE sBuffer AS String
+PUBLIC iSensorID AS Integer
+PUBLIC aScan AS String[]
+
+CONST BaseNode AS Byte = &H10
+CONST RoomNode AS Byte = &H11
+CONST LCDNode AS Byte = &H12
+CONST GLCDNode AS Byte = &H13
+CONST PlantNode AS Byte = &H14
+CONST EmonTX AS Byte = &H15
+CONST SoladinNode AS Byte = &H16
+
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+' JeeNode Ready
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Public Sub JeeNode_Ready()
+
+  Main.WriteLog(("[JeeNode] TCP socket connected."))
+
+End
+
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+' reconnect routine
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Public Sub tJeeNodeConnect_Timer()
+
+  If Not ConnectTCP() Then
+    Inc iConnectRetry
+    iConnectDelay *= iConnectRetry
+    tJeeNodeConnect.Delay = iConnectDelay
+  Endif
+
+End
+
+
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+' connect to the host:port
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Public Function ConnectTCP() As Boolean
+
+  ' try to close the connection
+  Try hJeeNode.Close
+
+  ' get a new one
+  hJeeNode = New Socket As "JeeNode"
+  hJeeNode.Connect(sTCPHost, iTCPPort)
+
+  ' all ok
+  Return True
+
+Catch ' some errors
+  Main.WriteLog(("[JeeNode] Error: ") & ERROR.Text)
+  Return False
+
+End
+
+' BaseNode
+PUBLIC SUB BaseNode_Send(sTemp AS String, sBackLight AS String)
+
+  DIM iBackLight AS Integer
+  DIM sA, sB, sString AS String
+  
+  aScan = Split(sTemp, Chr(46))
+  sTemp = aScan[0]& aScan[1] & "0"
+  
+  sA = Lsr((Val(sTemp)), 8)
+  sB = Val(sTemp) - (Val(sA) * 256)
+  
+  If sBackLight = "On" Then
+	iBackLight = 1
+  Else
+	iBackLight = 0
+  ENDIF
+
+	SendCommand("10," & Hour(Now) & ",0," & Minute(Now) & ",0," & Second(Now) & ",0," & sB & "," & sA & "," & iBackLight & ",0s")
+	 
+END
+
+
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+' send a command to the interface
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+PUBLIC SUB SendCommand(sMessage AS String)
+
+  DIM iCnt AS Integer
+
+  IF Main.bJeeNodeDebug THEN Main.WriteDebugLog("[JeeNode] > " & sMessage)
+
+    ' send the message to the tcp stream
+	TRY PRINT #hJeeNode, sMessage
+    IF ERROR THEN Main.WriteDebugLog(("[JeeNode] Unable to write to TCP port! -> ") & Error.Text)
+	
+END
+
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+' disconnect from the host
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Public Function Disconnect() As Boolean
+
+  ' try to close the connection
+  Try hJeeNode.Close
+  Try hJeeNode.Remove
+    Main.WriteLog(("[JeeNode] TCP socket close."))
+    
+  ' all ok
+  Return True
+
+Catch ' some errors
+  Main.WriteLog(("[JeeNode] Error: ") & ERROR.Text)
+  Return False
+
+End
+
+Public Sub JeeNode_Closed()
+
+  Main.WriteDebugLog(("[JeeNode] ERROR: TCP socket closed by peer."))
+  If iConnectRetry < 6 Then
+    Main.WriteDebugLog(("[JeeNode] Retry to connect" & IIf(iConnectRetry, " in " & (iConnectDelay / 60) & " minutes.", ".")))
+    tJeeNodeConnect.Start
+  Endif
+
+End
+
+
+Public Sub JeeNode_Error()
+
+  Dim sString As String = "[JeeNode: ]"
+
+  ' handle error
+  Select Case hJeeNode.Status
+    Case Net.CannotCreateSocket
+      Main.WriteLog(sString & ("The system does not allow to create a socket."))
+    Case Net.HostNotFound
+      Main.WriteLog(sString & ("Host '") & sTCPHost & ("' not found."))
+    Case Net.ConnectionRefused
+      Main.WriteLog(sString & ("Unable to connect. Connection refused."))
+    Case Net.CannotRead
+      Main.WriteLog(sString & ("Error reading data."))
+    Case Net.CannotWrite
+      Main.WriteLog(sString & ("Error writing data."))
+  End Select
+
+End
+
+PUBLIC SUB JeeNode_Read()
+
+  DIM sData AS String
+
+  READ #hJeeNode, sData, 1
+  IF ERROR THEN Main.WriteDebugLog(("[JeeNode] Error reading data from the TCP port! -> ") & Error.Text)
+  
+    IF sData = Chr(10) THEN ' buffer until linefeed then parse
+    IF Len(sBuffer) > 1 AND IF Left(sBuffer, 2) = "OK" THEN LookupAddress(Left(sBuffer, Len(sBuffer) - 1))
+    sBuffer = NULL
+  ELSE
+    sBuffer &= sData
+  END IF
+
+END
+
+PRIVATE SUB LookupAddress(sData AS String)
+
+  IF Main.bJeeNodeDebug THEN Main.WriteDebugLog("[JeeNode] " & sData)
+
+  aScan = Split(sData, Chr(32))
+  
+  	iSensorID = aScan[1]
+	iSensorID = IIf(iSensorID > 31, iSensorID - 32, iSensorID)
+  
+  SELECT CASE aScan[2]
+	CASE BaseNode
+		Main.WriteDebugLog("[BaseNode] ID: " & iSensorID & " " & aScan.Count)
+	CASE RoomNode
+		Main.WriteDebugLog("[RoomNode] ID: " & iSensorID & " " & aScan.Count)
+	CASE LCDNode
+		Main.WriteDebugLog("[LCDNode] ID: " & iSensorID & " " & aScan.Count)
+	CASE GLCDNode
+		Main.WriteDebugLog("[GLCDNode] ID: " & iSensorID & " " & aScan.Count)	
+	CASE PlantNode AND aScan.Count = 9
+		ProcessPlantNode()
+	CASE EmonTX AND aScan.Count = 12
+		ProcessEmonTX()
+	CASE SoladinNode AND aScan.Count = 22
+		ProcessSoladinNode()
+	CASE ELSE
+		Main.WriteLog("[JeeNode] Unknown Node Type: &H" & Hex$(aScan[2]) & " ID: " & iSensorID & " Lenght: " & aScan.Count)	
+  END SELECT
+
+  CATCH
+	Main.WriteDebugLog(("ERROR: Parsing JeeNode data packet: ") & ERROR.Text & " at " & ERROR.Where)
+	
+END
+
+PRIVATE SUB ProcessEmonTX()
+	
+'	struct
+'	byte importing :1;  // importing = 1, exporting = 0
+'	int power1
+'	int power2
+'	int power3
+'	int voltage
+
+  DIM sMessage AS String	
+  DIM iImporting, iPower1, iPower2, iPower3 AS Integer
+  DIM fVoltage AS Float
+  DIM bImporting AS Boolean
+
+	iImporting = (aScan[3])
+	iPower2 = ((256 * (CInt(aScan[7]))) + CInt(aScan[6]))
+	iPower3 = ((256 * (CInt(aScan[9]))) + CInt(aScan[8]))
+	fVoltage = ((256 * (CInt(aScan[11]))) + CInt(aScan[10])) / 100
+
+	iPower1 = ((256 * (CInt(aScan[5]))) + CInt(aScan[4]))												
+	IF iPower1 = 0 THEN
+	  sMessage = "[EmonTX] ID: " & iSensorID & " " & "0000" & "W " & Format(iPower2, "0000") & "W " & Format(iPower3, "0000") & "W " & Format(fVoltage, "000.00" & "V")
+	ELSE	
+		IF iImporting = 0 THEN
+			iPower1 = 65536 - iPower1
+			sMessage = "[EmonTX] ID: " & iSensorID & " " & Format(Int(-iPower1), "-000")  & "W " & Format(iPower2, "0000") & "W " & Format(iPower3, "0000") & "W " & Format(fVoltage, "000.00" & "V")
+		ELSE
+			sMessage = "[EmonTX] ID: " & iSensorID & " " & Format(Int(iPower1), "0000")  & "W " & Format(iPower2, "0000") & "W " & Format(iPower3, "0000") & "W " & Format(fVoltage, "000.00" & "V")
+		END IF
+	END IF
+	
+    Main.WriteLog(sMessage)
+    Main.BroadcastEvent(sMessage, iTCPPort)
+	
+	IF Main.bMySQLEnabled THEN TRY Main.hDB.Exec("INSERT INTO tblEmonTX_&1 (TimeStamp, Power1, Voltage) VALUES (&2, &3, &4)", iSensorID, Now(), iPower1, fVoltage)
+	
+	Energy.UpdateEmonTX(iPower1, iPower3)
+	
+END
+
+PRIVATE SUB ProcessSoladinNode()
+	
+'	struct
+'   int PVvolt;
+'   int PVamp;
+'   int ACgridPower;
+'   int ACgridFreq;
+'   int ACgridVolt;
+'   int DeviceTemp;
+'   int AlarmFlag;
+'   int TotalPower;
+'   int TotalOperationTime;
+'   byte lobat :1;  // supply voltage dropped under 3.1V: 0..1
+
+  DIM sMessage, sAlarm, sLowBat AS String	
+  DIM iACgridPower, iDeviceTemp, iLowBat AS Integer
+  DIM fPVvoltage, fPVamp, fACgridFreq, fACgridVolt, fTotalPower AS Float
+
+	fPVvoltage = ((256 * (CInt(aScan[4]))) + CInt(aScan[3])) / 10
+	fPVamp = ((256 * (CInt(aScan[6]))) + CInt(aScan[5])) / 100
+	iACgridPower = ((256 * (CInt(aScan[8]))) + CInt(aScan[7]))
+	fACgridFreq = ((256 * (CInt(aScan[10]))) + CInt(aScan[9])) / 100
+	fACgridVolt = ((256 * (CInt(aScan[12]))) + CInt(aScan[11]))
+	iDeviceTemp = ((256 * (CInt(aScan[14]))) + CInt(aScan[13]))
+	fTotalPower = ((256 * (CInt(aScan[18]))) + CInt(aScan[17])) / 100
+	
+	sAlarm = " Alarms="
+	IF BTst(CInt(aScan[15]),0) THEN sAlarm &= "[U-Solar to High]"
+	IF BTst(CInt(aScan[15]),1) THEN sAlarm &= "[U-Solar to Low]"
+	IF BTst(CInt(aScan[15]),2) THEN sAlarm &= "[No Grid]"
+	IF BTst(CInt(aScan[15]),3) THEN sAlarm &= "[U-AC to High]"
+	IF BTst(CInt(aScan[15]),4) THEN sAlarm &= "[U-AC to Low]"
+	IF BTst(CInt(aScan[15]),5) THEN sAlarm &= "[F-AC to High]"
+	IF BTst(CInt(aScan[15]),6) THEN sAlarm &= "[F-AC to Low]"
+	IF BTst(CInt(aScan[15]),7) THEN sAlarm &= "[Temperature to High]"
+	IF BTst(CInt(aScan[16]),0) THEN sAlarm &= "[Hardware Failure]"
+	IF BTst(CInt(aScan[16]),1) THEN sAlarm &= "[Starting]"
+	IF BTst(CInt(aScan[16]),2) THEN sAlarm &= "[Max Power]"
+	IF BTst(CInt(aScan[16]),3) THEN sAlarm &= "[Max Current]"
+		
+	iLowBat = Lsr(CInt(aScan[8]), 2) AND 1
+		sLowBat = If(iLowBat, "Empty", "OK")
+
+	sMessage = "[SoladinNode] ID: " & iSensorID
+	sMessage &=" PV=" & Format(fPVvoltage, "000.00") & "V"
+	sMessage &=" " & Format(fPVamp, "0.00") & "A"
+	sMessage &=" AC=" & Format(iACgridPower, "000") & "W"
+	sMessage &=" " & Format(fACgridFreq, "00.00") & "Hz"
+	sMessage &=" " & Format(fACgridVolt, "000.00") & "V"
+	sMessage &=" " & Format(iDeviceTemp, "00.00") & "°C"
+	sMessage &=" Total=" & Format(fTotalPower, "000.00") & "kWh"
+	sMessage &=" Batt=" & sLowBat
+	sMessage &= sAlarm
+		
+    Main.WriteLog(sMessage)
+    Main.BroadcastEvent(sMessage, iTCPPort)
+	
+	IF Main.bMySQLEnabled AND fPVvoltage > 1 AND iACgridPower > 1 THEN TRY Main.hDB.Exec("INSERT INTO tblSoladinNode_&1 (TimeStamp, PVvolt, PVamp, ACpower, ACfreq, ACvolt, Temp, TotalPower, TotalOpTime) VALUES (&2, &3, &4, &5, &6, &7, &8, &9, &10)", iSensorID, Now(), fPVvoltage, fPVamp, iACgridPower, fACgridFreq, fACgridVolt, iDeviceTemp, fTotalPower)
+	
+	Energy.UpdateSoladin(iACgridPower)
+	
+END
+
+PRIVATE SUB ProcessEmonBase()
+	
+'	struct
+'	int hour
+'	int mins
+'	int sec
+
+	Main.WriteLog("[BaseNode] ID: " & iSensorID)
+
+END
+
+PRIVATE SUB ProcessPlantNode()
+
+'	struct
+'	byte light;     // light sensor: 0..255
+'	int soil;       // soil sensor:
+'	int temp;       // temperature: -500..+500 (tenths)
+'	byte lobat :1;  // supply voltage dropped under 3.1V: 0..1
+
+  DIM sLowBat, sMessage AS String
+  DIM iLDR, iSoil, iLowBat AS Integer
+  DIM fTemp AS Float
+  
+	iLDR = aScan[3]
+	iSoil = ((256 * (CInt(aScan[5]))) + CInt(aScan[4]))
+	fTemp = ((256 * (CInt(aScan[7]))) + CInt(aScan[6])) / 100
+	iLowBat = Lsr(CInt(aScan[8]), 2) AND 1
+	sLowBat = If(iLowBat, "Empty", "OK")
+
+	sMessage = "[PlantNode] ID: " & iSensorID & " " & Format(iLDR, "000") & " " & Format(iSoil, "0000") & " " & Format(fTemp, "00.0") & " " & sLowBat
+    Main.WriteLog(sMessage)
+    Main.BroadcastEvent(sMessage, iTCPPort)
+	
+	IF Main.bMySQLEnabled THEN TRY Main.hDB.Exec("INSERT INTO tblPlantNode_&1 (TimeStamp, Light, Soil, Temp, Battery) VALUES (&2, &3, &4, &5, &6)", iSensorID, Now(), iLDR, iSoil, fTemp, iLowBat)
+	
+END
+
+' implement properties
+Private Function TCPHost_Read() As String
+
+  Return sTCPHost
+
+End
+
+Private Sub TCPHost_Write(Value As String)
+
+  sTCPHost = Value
+
+End
+
+Private Function TCPPort_Read() As Integer
+
+  Return iTCPPort
+
+End
+
+Private Sub TCPPort_Write(Value As Integer)
+
+  iTCPPort = Value
+
+End
+
+Private Function JeeNodeDebug_Read() As Boolean
+
+  Return bJeeNodeDebug
+
+End
+
+Private Sub JeeNodeDebug_Write(Value As Boolean)
+
+  bJeeNodeDebug = Value
+
+End

@@ -1,0 +1,409 @@
+' Gambas module file
+
+' Description:
+' Main.module
+
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+' this is the place where all global variables are defined
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+' Main
+Public sProgramVersion As String = "0.1.0"
+Public sBaseDir As String
+Public sSettings As String = "settings.conf"
+PUBLIC bProgramStartup AS Boolean ' program is started
+
+' MySQL
+Public bMySQLEnabled As Boolean
+Public sMySQLHost As String
+Public sMySQLUser As String
+Public sMySQLPass As String
+Public sMySQLDatabase As String
+Public bMySQLDebug As Boolean
+Public hDB As New Connection
+
+' Broadcast UDP
+Public bBroadcastUDPEnabled As Boolean
+Public hBroadcastEvent As UdpSocket
+Public sBroadcastAddrs As String
+Public iBroadcastUDPPort As Integer
+
+' UDP Server
+Public hUDPServer As UdpSocket
+
+' HDDTemp
+Public bHDDTempEnabled As Boolean
+Public sHDDTempTCPHost As String
+Public iHDDTempTCPPort As Integer
+Public iHDDTempPollTime As Integer
+Public iHDDTempThreshold As Integer
+Public bHDDTempDebug As Boolean
+
+' RFXCom Tranceiver
+Public bRFXComTRXEnabled As Boolean
+Public bRFXComTRXDebug As Boolean
+Public sRFXComTRXTCPHost As String
+Public iRFXComTRXTCPPort As Integer
+Public hRFXComTRX As CRFXComTRX
+
+' JeeNode
+Public bJeeNodeDebug As Boolean
+Public bJeeNodeEnabled As Boolean
+Public sJeeNodeTCPHost As String
+Public iJeeNodeTCPPort As Integer
+Public hJeeNode As CJeeNode
+
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+' load config
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Public Sub GetConfig()
+
+  Dim hSettings As Settings
+
+  ' load basic settings from file
+  If Not Exist(sBaseDir &/ sSettings) Then
+    WriteLog(("Couldn't open config file '") & sBaseDir &/ sSettings & "'") 
+  Else
+    WriteLog(("Using config file '") & sBaseDir &/ sSettings & "'")
+
+	' UDP Broadcast
+    bBroadcastUDPEnabled = GetConfigValue("Broadcast/Enabled")
+    sBroadcastAddrs = GetConfigValue("Broadcast/Address")
+    iBroadcastUDPPort = GetConfigValue("Broadcast/UDPPort")
+
+	' MySQL Log DataBase
+	bMySQLEnabled = GetConfigValue("MySQL/Enabled")
+    bMySQLDebug = GetConfigValue("MySQL/Debug")
+	sMySQLHost = GetConfigValue("MySQL/Host")
+    sMySQLUser = GetConfigValue("MySQL/User")
+    sMySQLPass = GetConfigValue("MySQL/Password")
+    sMySQLDatabase = GetConfigValue("MySQL/Database")
+
+	' HDDTemp
+	bHDDTempEnabled = GetConfigValue("HDDTemp/Enabled")
+	bHDDTempDebug = GetConfigValue("HDDTemp/Debug")
+	sHDDTempTCPHost = GetConfigValue("HDDTemp/Host")
+	iHDDTempTCPPort = GetConfigValue("HDDTemp/Port")
+	iHDDTempPollTime = GetConfigValue("HDDTemp/PollTime")
+	iHDDTempThreshold = GetConfigValue("HDDTemp/Treshold")
+
+	' RFXCom Tranceiver
+	bRFXComTRXEnabled = GetConfigValue("RFXComTRX/Enabled")
+	bRFXComTRXDebug = GetConfigValue("RFXComTRX/Debug")
+    sRFXComTRXTCPHost = GetConfigValue("RFXComTRX/Host")
+    iRFXComTRXTCPPort = GetConfigValue("RFXComTRX/Port")
+
+	' JeeNode
+	bJeeNodeEnabled = GetConfigValue("JeeNode/Enabled")
+    bJeeNodeDebug = GetConfigValue("JeeNode/Debug")
+    sJeeNodeTCPHost = GetConfigValue("JeeNode/Host")
+    iJeeNodeTCPPort = GetConfigValue("JeeNode/Port")
+
+  End If
+
+End
+
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+' display startup information
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Public Sub DisplayProgramInfo()
+
+  Dim sUptime, sModified As String
+
+  With Stat(Application.Path)
+    sModified = Format$(.LastModified, "yyyy-mm-dd at hh:nn:ss")
+  End With
+
+  Exec ["uptime"] To sUptime
+  WriteLog(("  ---- Program Restart ----"))
+  WriteLog(("Starting ") & Application.Name & " V" & Main.sProgramVersion & (" last updated on ") & sModified)
+  WriteLog(("Running on ") & System.Host & " (pid " & Application.Id & (") as user ") & System.User.Name & " (id " & System.User.Id & ")" & (" with language ") & System.Language)
+  WriteLog(("Running on Gambas version ") & GetGambasVersion())
+  WriteLog(("Program base directory is '") & sBaseDir & "'/")
+  If bBroadcastUDPEnabled Then WriteLog(("UDP Broadcasting to Gira HomeServer@" & sBroadcastAddrs))
+  WriteLog(("Server uptime is ") & Left$(Replace$(sUptime, "  ", " "), -1))
+
+End
+
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+' Connect to MySQL Log DataBase
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Private Sub Setup_MySQL()
+
+	If bMySQLEnabled Then
+		Main.WriteLog(("MySQL Log DataBase enabled."))
+
+		' connect to the mysql database
+		WriteLog(("Connecting to database ..."))
+		If Not Main.ConnectDatabase() Then
+			Main.WriteLog(("Error: Couldn't open the database (called '") & Main.sMySQLDatabase & ("') Check '") & Main.sSettings & ("' or create & load a database."))
+			Quit
+		End If
+	Else
+		WriteLog(("MySQL Log DataBase disabled."))
+	End If
+
+End
+
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+' connect to the mysql database
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Public Function ConnectDatabase() As Boolean
+
+  ' try to close the connection first
+  Try hDB.Close
+  
+	' get a new one
+	With hDB
+		.Type = "mysql"
+		.Host = sMySQLHost
+		.Login = sMySQLUser
+		.Password = sMySQLPass
+		.Name = sMySQLDatabase
+		.Open
+	End With
+		
+	' all ok
+		Main.WriteLog("Connected to MySQL DataBase: " & sMySQLDatabase & " on " & sMySQLHost)
+		Return True
+
+	Catch ' some errors
+		Main.WriteLog(("MySQL Error: ") & ERROR.Text)
+		Return False
+
+End
+
+
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+' check if HDD temps are below threshold
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Private Sub Setup_HDDTemp()
+
+  If bHDDTempEnabled Then
+    WriteLog(("HDDTemp support enabled."))
+    ' start timer
+    HDDTemp.Run()
+  Else
+    Try HDDTemp.tHDDTemp.Stop
+    Try HDDTemp.hHDDTemp.Close
+    WriteLog(("HDDTemp support disabled."))
+  End If
+
+End
+
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+' connect with rfxcom tranceiver tcp host:port
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Private Sub Setup_RFXComTRX()
+
+  If bRFXComTRXEnabled Then
+    WriteLog(("RFXCom tranceiver support enabled."))
+	If bRFXComTRXDebug Then WriteDebugLog(("RFXCcom tranceiver DEBUG enabled"))
+      ' create a new RFXCom class instance
+      hRFXComTRX = New CRFXComTRX
+      ' set the properties
+      With hRFXComTRX
+        .TCPHost = sRFXComTRXTCPHost
+        .TCPPort = iRFXComTRXTCPPort
+        .RFXComDebug = bRFXComTRXDebug
+      End With
+      ' connect to the rfxcom host:port
+      If hRFXComTRX.ConnectTCP() Then
+        WriteLog(("RFXCom tranceiver TCP interface connecting to ") & sRFXComTRXTCPHost & ":" & iRFXComTRXTCPPort)
+      Else
+        WriteLog(("ERROR: RFXCom tranceiver TCP interface FAILED to connect to ") & sRFXComTRXTCPHost & ":" & iRFXComTRXTCPPort)
+        hRFXComTRX = Null
+      End If
+  Else
+    WriteLog(("RFXCom tranceiver support disabled."))
+  End If
+
+End
+
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+' connect with JeeNode tcp host:port
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Private Sub Setup_JeeNode()
+
+  If bJeeNodeEnabled Then
+    WriteLog(("JeeNode support enabled."))
+	If bJeeNodeDebug Then WriteDebugLog(("JeeNode DEBUG enabled"))
+      ' create a new JeeNode class instance
+      hJeeNode = New CJeeNode
+      ' set the properties
+      With hJeeNode
+        .TCPHost = sJeeNodeTCPHost
+        .TCPPort = iJeeNodeTCPPort
+        .JeeNodeDebug = bJeeNodeDebug
+      End With
+      ' connect to JeeNode host:port
+      If hJeeNode.ConnectTCP() Then
+        WriteLog(("JeeNode TCP interface connecting to ") & sJeeNodeTCPHost & ":" & iJeeNodeTCPPort)
+      Else
+        WriteLog(("ERROR: JeeNode TCP interface FAILED to connect to ") & sJeeNodeTCPHost & ":" & iJeeNodeTCPPort)
+        hJeeNode = Null
+      End If
+  Else
+    WriteLog(("JeeNode support disabled."))
+  End If
+
+End
+
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+' broadcast events via UDP
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Public Sub BroadcastEvent(sMessage As String, iTargetPort As Integer)
+
+  Dim sIP As String
+
+  If bBroadcastUDPEnabled Then 
+    hBroadcastEvent = New UdpSocket As "BroadcastUDP"
+    hBroadcastEvent.Broadcast = True
+    hBroadcastEvent.Port = 0
+    hBroadcastEvent.Bind()
+    hBroadcastEvent.TargetPort = iTargetPort
+    hBroadcastEvent.TargetHost = sBroadcastAddrs 
+
+    Write #hBroadcastEvent, sMessage, Len(sMessage)
+
+    Catch
+      WriteLog(("ERROR: Cannot broadcast UDP message! ") & ERROR.Text & (" at ") & ERROR.Where)
+    Else 
+      WriteLog(("UDP Broadcast disabled"))
+  End If
+End
+
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+' start udp listener
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Private Function Setup_UDPServer()
+
+    hUDPServer = New UdpSocket As "UDPServer"
+	hUDPServer.Port = iBroadcastUDPPort
+	hUDPServer.Bind()
+      If Not Error Then WriteLog(("UDP Server listening on port ") & iBroadcastUDPPort)
+
+End
+
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+' got udp message from server
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Public Sub UDPServer_Read()
+
+  Dim sData As String
+  Dim aScan As String[]
+
+  Read #hUDPServer, sData, Lof(hUDPServer)
+
+  aScan = Split(sData, Chr(32))
+  
+'  aScan = Scan(sData, "* * * * *")
+  
+  If aScan.Count <= 1
+	WriteDebugLog("[UDP Server] " & sData & " : " & aScan.Count)
+	Return
+  Endif
+  
+  Select aScan[0]
+	Case "RFXcomTRX"
+		If aScan[1] = "AC" Then
+			hRFXComTRX.Lighting2(aScan[1], aScan[2] & " " & aScan[3], aScan[4])
+			WriteLog("[UDP Server] " & aScan[1] & " " & aScan[2] & " " & aScan[3] & " " & aScan[4])
+		Else
+			WriteDebugLog("[UDP Server] " & aScan[0])
+		Endif
+	Case "BaseNode"
+		hJeeNode.BaseNode_Send(aScan[1], aScan[2])
+	Case Else
+	  WriteDebugLog("[UDP Server] " & sData)
+  End Select
+
+End
+
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+' get a value from the config file
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Private Function GetConfigValue(sKey As String, Optional vValue As Variant) As Variant
+
+  Dim hSettings As Settings
+
+  hSettings = New Settings(sBaseDir &/ sSettings)
+
+  If Not IsNull(vValue) Then
+     Return hSettings[sKey, vValue]
+  Else
+     Return hSettings[sKey]
+  Endif
+
+End
+
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+' start various stuff
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Public Sub Setup()
+
+  WriteLog(("Starting setup ..."))
+
+  ' setup modules
+  Setup_MySQL() 			' MySQL Log DataBase
+  Setup_UDPServer() 	' UDP Listener
+  Setup_HDDTemp() 		' HDDTemp support
+  Setup_RFXComTRX() 	' RFXCom Tranceiver support
+  Setup_JeeNode() 		' JeeNode support
+  
+  Main.WriteLog(("Done with setup ..."))
+
+End
+
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+' main loop
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Public Sub Main()
+
+  ' determine basedir
+  sBaseDir = Application.Path
+
+  GetConfig()
+  DisplayProgramInfo()
+  
+  ' start all setups for modules
+  Main.WriteLog(("Loading modules ..."))
+  Main.Setup()
+
+End
+
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+' display text on console
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Public Sub WriteLog(sText As String, Optional bStrip As Boolean)
+
+  If Not bStrip Then sText &= "\n"
+  sText = Format$(Now, "yyyy/mm/dd hh:nn:ss") & " " & sText
+  Print sText;
+
+End
+
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+' display debug text on console
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Public Sub WriteDebugLog(sText As String, Optional bStrip As Boolean)
+
+  If Not bStrip Then sText &= "\n"
+  sText = Format$(Now, "yyyy/mm/dd hh:nn:ss") & " [DEBUG] " & sText
+  Print sText;
+
+End
+
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+' return version of gambas we are running with
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Public Function GetGambasVersion() As String
+
+  Dim sVer As String
+
+  Shell "gbx" & System.Version & " -V " To sVer
+  Return Trim(Mid$(sVer, InStr(sVer, "-") + 1))
+
+Catch
+  Return "?"
+
+End

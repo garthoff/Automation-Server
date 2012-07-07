@@ -1,0 +1,54 @@
+' Gambas module file
+
+' Description:
+' Energy.module
+' Routines for logging energy usage.
+' Need to check accuracy!
+
+' Copyright(C) 2022-2012 Timo Sariwating
+
+' Read file called COPYING for license details.
+
+' Power Vars
+Public iPowerGrid AS Integer
+Public iPowerSoladin AS Integer
+Public iPowerSUN250G AS Integer
+Public iPowerPVTotal AS Integer
+Public iPowerUsing AS Integer
+
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+' Update EmonTX
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+PUBLIC SUB UpdateEmonTX(iPower1 AS Integer, iPower2 AS Integer)
+
+	iPowerGrid = iPower1
+	iPowerSUN250G = iPower2
+	CalcPower()
+	
+END
+
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+' Update Soladin
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+PUBLIC SUB UpdateSoladin(iPower AS Integer)
+
+	iPowerSoladin = iPower
+	CalcPower()
+
+END
+
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+' Calculate Power Usage
+'~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+PRIVATE SUB CalcPower()
+
+	DIM sMessage AS STRING
+	
+	iPowerPVTotal = iPowerSoladin + iPowerSUN250G
+	iPowerUsing = iPowerPVTotal + iPowerGrid
+	
+	sMessage = "[Power] Grid=" & Format(iPowerGrid, "0000") & "W PV=" & Format(iPowerPVTotal, "0000") & "W Using=" & Format(iPowerUsing, "0000") & "W"
+	
+	Main.WriteLog(sMessage)
+	
+END
