@@ -16,6 +16,8 @@ Public iPowerSUN250G AS Integer
 Public iPowerPVTotal AS Integer
 Public iPowerUsing AS Integer
 
+Private iTCPPort As Integer = 9005
+
 '~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ' Update EmonTX
 '~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -47,8 +49,13 @@ PRIVATE SUB CalcPower()
 	iPowerPVTotal = iPowerSoladin + iPowerSUN250G
 	iPowerUsing = iPowerPVTotal + iPowerGrid
 	
-	sMessage = "[Power] Grid=" & Format(iPowerGrid, "0000") & "W PV=" & Format(iPowerPVTotal, "0000") & "W Using=" & Format(iPowerUsing, "0000") & "W"
+	IF iPowerGrid < 0 THEN
+		sMessage = "[Power] Grid=" & Format(iPowerGrid, "-000") & "W PV=" & Format(iPowerPVTotal, "0000") & "W Using=" & Format(iPowerUsing, "0000") & "W"
+	ELSE
+		sMessage = "[Power] Grid=" & Format(iPowerGrid, "0000") & "W PV=" & Format(iPowerPVTotal, "0000") & "W Using=" & Format(iPowerUsing, "0000") & "W"
+	END IF
 	
 	Main.WriteLog(sMessage)
+	Main.BroadcastEvent(sMessage, iTCPPort)
 	
 END

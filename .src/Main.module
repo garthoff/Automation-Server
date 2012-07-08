@@ -7,7 +7,7 @@
 ' this is the place where all global variables are defined
 '~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ' Main
-Public sProgramVersion As String = "0.1.0"
+Public sProgramVersion As String = "0.2.0"
 Public sBaseDir As String
 Public sSettings As String = "settings.conf"
 PUBLIC bProgramStartup AS Boolean ' program is started
